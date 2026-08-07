@@ -1,0 +1,18 @@
+{
+  "name": "release-action",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Label-driven weekly release automation for tanem-owned repos",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "typescript": "7.0.2"
+  }
+}
