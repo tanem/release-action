@@ -71,19 +71,28 @@ const comparePrecedence = (a: Version, b: Version) =>
  * The release this run builds on: the highest release tag by semver
  * precedence, rather than the most recent by date, so that a tag pushed out of
  * order can never walk the version backwards.
+ *
+ * Generic over the tag shape so the API layer can run it over raw GitHub tags,
+ * which carry a commit but no date until one is looked up. The parsed version
+ * comes back with the tag, so no caller has to parse the name a second time.
  */
-const latestRelease = (tags: Tag[]) => {
-  let latest: { version: Version; date: string } | null = null
+export const highestReleaseTag = <T extends { name: string }>(
+  tags: readonly T[],
+) => {
+  let highest: { tag: T; version: Version } | undefined
 
   for (const tag of tags) {
     const version = parseVersion(tag.name)
 
-    if (version && (!latest || comparePrecedence(version, latest.version) > 0)) {
-      latest = { version, date: tag.date }
+    if (
+      version &&
+      (!highest || comparePrecedence(version, highest.version) > 0)
+    ) {
+      highest = { tag, version }
     }
   }
 
-  return latest
+  return highest
 }
 
 const increment = ([major, minor, patch]: Version, bump: Bump) => {
@@ -135,13 +144,13 @@ export const decideRelease = ({
   pullRequests: PullRequest[]
   tags: Tag[]
 }): ReleaseDecision => {
-  const latest = latestRelease(tags)
+  const latest = highestReleaseTag(tags)
 
   // Everything merged since the last release — or everything ever merged, on a
   // repo that has yet to cut one.
   const unreleased = latest
     ? pullRequests.filter(
-        ({ merged_at }) => Date.parse(merged_at) > Date.parse(latest.date),
+        ({ merged_at }) => Date.parse(merged_at) > Date.parse(latest.tag.date),
       )
     : pullRequests
 
