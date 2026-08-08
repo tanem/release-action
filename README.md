@@ -12,7 +12,7 @@ release command it supersedes.
 
 1. Reads the repo's tags and merged pull requests, and derives the bump from
    the labels on everything merged since the last release.
-2. `npm version <bump>` — the version-bump commit and its `vX.Y.Z` tag, made as
+2. `npm version <version>` — the version-bump commit and its `vX.Y.Z` tag, made as
    `github-actions[bot]`, pushed together with `git push --follow-tags`.
 3. Creates the GitHub Release, with notes GitHub generates from the same
    labels — see [`.github/release.yml`](.github/release.yml).
@@ -143,3 +143,8 @@ ceremony beyond being signed in to the `gh` CLI:
 ```sh
 GITHUB_REPOSITORY=tanem/react-svg INPUT_DRY_RUN=true node run.ts
 ```
+
+[`AGENTS.md`](AGENTS.md) has the conventions this repo holds itself to: why
+there is no build step and no dependency list, the injected-seam pattern that
+keeps the tests hermetic, and what is deliberately absent. Read it before
+changing anything here.
