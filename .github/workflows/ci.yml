@@ -27,6 +27,43 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
+  # The end-to-end seam: the real action, in its safe mode, against this repo.
+  # The hermetic suite can't catch a broken input name, a missing output or a
+  # script the composite can't find — only running the composite can.
+  smoke:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The release decision reads the repo's merged pull requests.
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: dry-run
+        uses: ./
+        with:
+          dry-run: true
+      - name: Check the action reported an outcome
+        env:
+          STATUS: ${{ steps.dry-run.outputs.status }}
+          VERSION: ${{ steps.dry-run.outputs.version }}
+        run: |
+          echo "status=$STATUS version=$VERSION"
+          case "$STATUS" in
+            skipped)
+              [ -z "$VERSION" ] || { echo "a skipped run has no version, got '$VERSION'" >&2; exit 1; }
+              ;;
+            released)
+              echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
+                || { echo "expected a semver version, got '$VERSION'" >&2; exit 1; }
+              ;;
+            *)
+              echo "expected a released or skipped status, got '$STATUS'" >&2
+              exit 1
+              ;;
+          esac
+
   actionlint:
     runs-on: ubuntu-latest
     steps:

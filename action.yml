@@ -1,0 +1,46 @@
+name: Release
+description: >-
+  Derive a semver bump from the labels on the merged pull requests since the
+  last release, then tag, release and publish.
+
+inputs:
+  token:
+    description: >-
+      The token the action reads the repo's pull requests and tags with, and
+      pushes the release with. The ambient workflow token is enough.
+    default: ${{ github.token }}
+  dry-run:
+    description: Compute and log the release this run would make, changing nothing.
+    default: 'false'
+  publish:
+    description: >-
+      Publish the package to npm once the release is tagged. Repos with nothing
+      to publish set this to false and get the tag and GitHub Release only.
+      Declared but not yet honoured — releasing for real is not implemented.
+    default: 'true'
+
+outputs:
+  version:
+    description: The version released, e.g. 8.1.0. Empty when the run skipped.
+    value: ${{ steps.release.outputs.version }}
+  status:
+    description: Either `released` or `skipped`.
+    value: ${{ steps.release.outputs.status }}
+
+runs:
+  using: composite
+  steps:
+    # Node 24 for two reasons: it runs the TypeScript directly by stripping
+    # types, and it bundles the npm that OIDC trusted publishing needs. Pinned
+    # here rather than left to the calling repo's own version.
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: '24'
+    - id: release
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/run.ts"
+      env:
+        # The auth contract: the token input reaches the script as an env var,
+        # ahead of the `gh auth token` fallback that only local runs reach.
+        GH_TOKEN: ${{ inputs.token }}
+        INPUT_DRY_RUN: ${{ inputs['dry-run'] }}
