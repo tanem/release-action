@@ -143,3 +143,8 @@ ceremony beyond being signed in to the `gh` CLI:
 ```sh
 GITHUB_REPOSITORY=tanem/react-svg INPUT_DRY_RUN=true node run.ts
 ```
+
+[`AGENTS.md`](AGENTS.md) has the conventions this repo holds itself to: why
+there is no build step and no dependency list, the injected-seam pattern that
+keeps the tests hermetic, and what is deliberately absent. Read it before
+changing anything here.
