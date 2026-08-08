@@ -40,6 +40,7 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
+    if: github.ref_name == github.event.repository.default_branch
     steps:
       - uses: actions/checkout@<sha>
         with:
@@ -56,6 +57,19 @@ The `npm ci` and `npm test` steps are load-bearing: `npm publish` runs the
 package's own `prepublishOnly` build, and the tests gate the release. The
 action sets up its own Node 24 internally, so the version above is the one your
 build and tests run on, not the one the release runs on.
+
+The `if:` guard is load-bearing too, and it is the one line here most likely to
+look redundant. The cron only ever fires on your default branch — but
+`workflow_dispatch` can target *any* branch. Without the guard, dispatching the
+release against a long-lived version branch bumps, tags and publishes that
+branch to npm as `latest`, shipping the very major you were staging away from
+the default branch. Narrowing your CI workflow's branch filter is not a
+substitute: dispatch reaches any branch regardless of what CI builds.
+
+It reads the default branch rather than naming one, so it is right on a `master`
+repo and a `main` repo without an edit. A guard that names the branch works too
+— `github.ref == 'refs/heads/master'` — but it is a hazard in a template: name a
+branch the repo doesn't have and every release skips, silently and forever.
 
 The push reuses the credentials `actions/checkout` persists, so leave
 `persist-credentials` at its default in a publishing workflow. `contents: write`

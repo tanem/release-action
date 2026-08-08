@@ -22,6 +22,11 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # The cron only fires on the default branch, but a manual dispatch can
+    # target any branch. Publishing is off here, so the blast radius is a stray
+    # tag and GitHub Release rather than an npm publish — but the fleet copies
+    # this shape, and the fleet does publish.
+    if: github.ref_name == github.event.repository.default_branch
     permissions:
       # Creating the tag and the GitHub Release. Deliberately no
       # `id-token: write`: nothing here is published to npm, so there is no
