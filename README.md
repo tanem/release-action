@@ -12,7 +12,7 @@ release command it supersedes.
 
 1. Reads the repo's tags and merged pull requests, and derives the bump from
    the labels on everything merged since the last release.
-2. `npm version <bump>` — the version-bump commit and its `vX.Y.Z` tag, made as
+2. `npm version <version>` — the version-bump commit and its `vX.Y.Z` tag, made as
    `github-actions[bot]`, pushed together with `git push --follow-tags`.
 3. Creates the GitHub Release, with notes GitHub generates from the same
    labels — see [`.github/release.yml`](.github/release.yml).
