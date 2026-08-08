@@ -1,68 +1,18 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { fetchReleaseInputs, resolveToken, type FetchLike } from './github.ts'
-
-const REPO = { owner: 'tanem', repo: 'release-action' }
-
-const TAGS_URL =
-  'https://api.github.com/repos/tanem/release-action/tags?per_page=100'
-const PULLS_URL =
-  'https://api.github.com/repos/tanem/release-action/pulls?state=closed&per_page=100'
-const commitUrl = (sha: string) =>
-  `https://api.github.com/repos/tanem/release-action/commits/${sha}`
-
-const page = (body: unknown, next?: string) =>
-  new Response(JSON.stringify(body), {
-    headers: {
-      'content-type': 'application/json',
-      // Real Link headers carry a `last` rel too, and the `next` rel is absent
-      // on the final page — both are what the walker has to cope with.
-      ...(next ? { link: `<${next}>; rel="next", <${next}>; rel="last"` } : {}),
-    },
-  })
-
-/** A `fetch` that answers from a fixed routing table and records every call. */
-const stubFetch = (routes: Record<string, Response>) => {
-  const calls: { url: string; headers: Record<string, string> }[] = []
-
-  const fetch: FetchLike = async (url, init) => {
-    calls.push({
-      url,
-      headers: Object.fromEntries(new Headers(init?.headers).entries()),
-    })
-
-    const response = routes[url]
-
-    if (!response) {
-      throw new Error(`unexpected request: ${url}`)
-    }
-
-    return response
-  }
-
-  return { fetch, calls }
-}
-
-const apiTag = (name: string, sha: string) => ({ name, commit: { sha } })
-
-const apiPull = (
-  number: number,
-  labels: string[] = ['bug'],
-  mergedAt: string | null = '2026-02-01T00:00:00Z',
-) => ({
-  number,
-  title: `PR ${number}`,
-  labels: labels.map((name) => ({ name, color: 'ededed' })),
-  merged_at: mergedAt,
-  // Fields the decision core has no use for, present as they are on the wire.
-  state: 'closed',
-  user: { login: 'tanem' },
-})
-
-// A response body can only be read once, so these are built per test rather
-// than shared as constants.
-const noTags = () => ({ [TAGS_URL]: page([]) })
-const noPulls = () => ({ [PULLS_URL]: page([]) })
+import {
+  apiPull,
+  apiTag,
+  commitUrl,
+  noPulls,
+  noTags,
+  page,
+  PULLS_URL,
+  REPO,
+  stubFetch,
+  TAGS_URL,
+} from './fixtures.ts'
+import { fetchReleaseInputs, resolveToken } from './github.ts'
 
 describe('pagination', () => {
   test('walks `Link` headers to completion before filtering tags', async () => {
