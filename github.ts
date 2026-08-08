@@ -10,8 +10,9 @@ import { execFileSync } from 'node:child_process'
 import { highestReleaseTag, type PullRequest, type Tag } from './main.ts'
 
 /**
- * The one seam the tests inject. Narrower than `globalThis.fetch` (this layer
- * only ever passes a URL string), which every real implementation satisfies.
+ * The seam the tests inject for every HTTP call. Narrower than
+ * `globalThis.fetch` (this layer only ever passes a URL string), which every
+ * real implementation satisfies.
  */
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>
 
