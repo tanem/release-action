@@ -1,0 +1,47 @@
+name: Release
+
+# This repo is a fleet member like any other, and releases on the same weekly
+# cadence. What puts it ahead of the fleet is not the clock but the ref: fleet
+# repos pin the action by SHA and let Renovate roll the pin forward, while this
+# run takes the tip of `main`. A change that breaks the release flow breaks it
+# here, on the repo with nothing to publish, before any pin moves onto it.
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+# Nothing is granted a job that hasn't asked for it.
+permissions: {}
+
+# Workflow-scoped and never cancelled: a release half-way through creating a tag
+# is worse than a release that waits for the run ahead of it.
+concurrency:
+  group: ${{ github.workflow }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      # Creating the tag and the GitHub Release. Deliberately no
+      # `id-token: write`: nothing here is published to npm, so there is no
+      # provenance to mint.
+      contents: write
+      # The release decision reads the repo's merged pull requests.
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing in this run reads git history — the tags are read over the
+          # API and the release creates its own tag. Checking out in full
+          # anyway keeps the dogfood run from being a lighter checkout than the
+          # fleet's, which is the one difference that could hide a failure.
+          fetch-depth: 0
+          # Credentials are the one thing it does go without: with publishing
+          # off there is no bump commit and no push to authenticate.
+          persist-credentials: false
+      # The working copy, not a pinned release of it — dogfooding the tip of
+      # `main` is the whole point.
+      - uses: ./
+        with:
+          publish: false
