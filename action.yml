@@ -7,7 +7,8 @@ inputs:
   token:
     description: >-
       The token the action reads the repo's pull requests and tags with, and
-      pushes the release with. The ambient workflow token is enough.
+      creates the GitHub Release with. The ambient workflow token is enough.
+      The push uses the credentials the checkout persisted, not this.
     default: ${{ github.token }}
   dry-run:
     description: Compute and log the release this run would make, changing nothing.
@@ -15,8 +16,8 @@ inputs:
   publish:
     description: >-
       Publish the package to npm once the release is tagged. Repos with nothing
-      to publish set this to false and get the tag and GitHub Release only.
-      Declared but not yet honoured — releasing for real is not implemented.
+      to publish set this to false and get the tag and GitHub Release only,
+      with no version-bump commit.
     default: 'true'
 
 outputs:
@@ -44,3 +45,4 @@ runs:
         # ahead of the `gh auth token` fallback that only local runs reach.
         GH_TOKEN: ${{ inputs.token }}
         INPUT_DRY_RUN: ${{ inputs['dry-run'] }}
+        INPUT_PUBLISH: ${{ inputs.publish }}

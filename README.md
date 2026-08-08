@@ -8,9 +8,20 @@ package to npm — with no human step.
 It replaces [`tanem-scripts`](https://github.com/tanem/tanem-scripts), whose
 release command it supersedes.
 
-> **Status:** under construction. `dry-run: true` works end to end; releasing
-> for real — and with it the `publish` input — is not implemented yet, and
-> fails the run rather than quietly doing nothing.
+## What a release run does
+
+1. Reads the repo's tags and merged pull requests, and derives the bump from
+   the labels on everything merged since the last release.
+2. `npm version <bump>` — the version-bump commit and its `vX.Y.Z` tag, made as
+   `github-actions[bot]`, pushed together with `git push --follow-tags`.
+3. Creates the GitHub Release, with notes GitHub generates from the same
+   labels — see [`.github/release.yml`](.github/release.yml).
+4. `npm publish --access public`. Provenance comes from npm's trusted
+   publishing, so no `--provenance` flag and no `registry-url` are needed.
+
+With `publish: false` — how this repo releases itself — steps 2 and 4 are
+skipped: the run tags the checked-out commit and creates the GitHub Release,
+and nothing is committed or published.
 
 ## Usage
 
@@ -45,13 +56,18 @@ package's own `prepublishOnly` build, and the tests gate the release. The
 action sets up its own Node 24 internally, so the version above is the one your
 build and tests run on, not the one the release runs on.
 
+The push reuses the credentials `actions/checkout` persists, so leave
+`persist-credentials` at its default in a publishing workflow. `contents: write`
+covers the push and the release; `id-token: write` is what npm's trusted
+publishing mints provenance from.
+
 ### Inputs
 
 | Input     | Default               | What it does                                                    |
 | --------- | --------------------- | --------------------------------------------------------------- |
-| `token`   | `${{ github.token }}` | Reads pull requests and tags; pushes the release.               |
+| `token`   | `${{ github.token }}` | Reads pull requests and tags; creates the GitHub Release.        |
 | `dry-run` | `false`               | Computes and logs the release this run would make, changing nothing. |
-| `publish` | `true`                | Publishes to npm once the release is tagged.                    |
+| `publish` | `true`                | Bumps, commits and publishes to npm. `false` tags and releases only. |
 
 ### Outputs
 

@@ -12,6 +12,8 @@ export const TAGS_URL =
   'https://api.github.com/repos/tanem/release-action/tags?per_page=100'
 export const PULLS_URL =
   'https://api.github.com/repos/tanem/release-action/pulls?state=closed&per_page=100'
+export const RELEASES_URL =
+  'https://api.github.com/repos/tanem/release-action/releases'
 export const commitUrl = (sha: string) =>
   `https://api.github.com/repos/tanem/release-action/commits/${sha}`
 
@@ -81,3 +83,11 @@ export const apiPull = (
 
 export const noTags = () => ({ [TAGS_URL]: page([]) })
 export const noPulls = () => ({ [PULLS_URL]: page([]) })
+
+/** GitHub's answer to a release it accepted: 201, with the release it made. */
+export const releaseCreated = () => ({
+  [RELEASES_URL]: new Response('{"id":1}', {
+    status: 201,
+    headers: { 'content-type': 'application/json' },
+  }),
+})
