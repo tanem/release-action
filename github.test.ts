@@ -8,11 +8,13 @@ import {
   noTags,
   page,
   PULLS_URL,
+  releaseCreated,
+  RELEASES_URL,
   REPO,
   stubFetch,
   TAGS_URL,
 } from './fixtures.ts'
-import { fetchReleaseInputs, resolveToken } from './github.ts'
+import { createRelease, fetchReleaseInputs, resolveToken } from './github.ts'
 
 describe('pagination', () => {
   test('walks `Link` headers to completion before filtering tags', async () => {
@@ -186,6 +188,66 @@ describe('requests', () => {
     await assert.rejects(
       fetchReleaseInputs({ ...REPO, fetch, token: undefined }),
       /\/tags.*401.*Bad credentials/s,
+    )
+  })
+})
+
+describe('the release it creates', () => {
+  test('asks GitHub to generate the notes for the tag', async () => {
+    const { fetch, calls } = stubFetch(releaseCreated())
+
+    await createRelease({
+      ...REPO,
+      tag: 'v1.2.3',
+      fetch,
+      token: 'ghs_secret',
+    })
+
+    assert.equal(calls.length, 1)
+
+    const [call] = calls
+
+    assert.equal(call?.url, RELEASES_URL)
+    assert.equal(call?.method, 'POST')
+    assert.equal(call?.headers['authorization'], 'Bearer ghs_secret')
+    assert.equal(call?.headers['content-type'], 'application/json')
+    assert.deepEqual(JSON.parse(String(call?.body)), {
+      tag_name: 'v1.2.3',
+      name: 'v1.2.3',
+      generate_release_notes: true,
+    })
+  })
+
+  test('names the commit to tag when there is no tag yet', async () => {
+    const { fetch, calls } = stubFetch(releaseCreated())
+
+    await createRelease({
+      ...REPO,
+      tag: 'v1.2.3',
+      commitish: 'sha-of-the-run',
+      fetch,
+      token: undefined,
+    })
+
+    assert.deepEqual(JSON.parse(String(calls[0]?.body)), {
+      tag_name: 'v1.2.3',
+      name: 'v1.2.3',
+      generate_release_notes: true,
+      target_commitish: 'sha-of-the-run',
+    })
+  })
+
+  test('fails loudly, naming the request and the status', async () => {
+    const { fetch } = stubFetch({
+      [RELEASES_URL]: new Response(
+        '{"message":"Validation Failed: already_exists"}',
+        { status: 422, statusText: 'Unprocessable Entity' },
+      ),
+    })
+
+    await assert.rejects(
+      createRelease({ ...REPO, tag: 'v1.2.3', fetch, token: undefined }),
+      /POST.*\/releases.*422.*already_exists/s,
     )
   })
 })

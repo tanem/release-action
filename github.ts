@@ -36,32 +36,43 @@ interface ApiCommit {
 }
 
 /**
- * A GET against the API, authenticated if there is a token to authenticate
+ * A request against the API, authenticated if there is a token to authenticate
  * with. Bound to its `fetch` and token once so that neither has to be threaded
  * through every function below.
+ *
+ * Omitting `write` makes it a GET with no body, which is what every read below
+ * is — and what the tests assert a dry run stays limited to.
  */
-type Get = (url: string) => Promise<Response>
+type Request = (
+  url: string,
+  write?: { method: string; body: string },
+) => Promise<Response>
 
-const getter =
-  (fetch: FetchLike, token: string | undefined): Get =>
-  async (url) => {
+const requester =
+  (fetch: FetchLike, token: string | undefined): Request =>
+  async (url, write) => {
     const response = await fetch(url, {
       headers: {
         accept: 'application/vnd.github+json',
         'x-github-api-version': '2022-11-28',
         'user-agent': 'tanem/release-action',
         ...(token ? { authorization: `Bearer ${token}` } : {}),
+        ...(write ? { 'content-type': 'application/json' } : {}),
       },
+      ...write,
     })
 
     if (!response.ok) {
       throw new Error(
-        `GitHub API request failed: GET ${url} → ${response.status} ${response.statusText}\n${await response.text()}`,
+        `GitHub API request failed: ${write?.method ?? 'GET'} ${url} → ${response.status} ${response.statusText}\n${await response.text()}`,
       )
     }
 
     return response
   }
+
+/** A read, for the listing walks below — the same request with no body. */
+type Get = (url: string) => Promise<Response>
 
 /**
  * The next page's URL, per RFC 8288. Absent on the last page, which is how the
@@ -181,7 +192,7 @@ export const fetchReleaseInputs = async ({
   fetch = globalThis.fetch,
   token,
 }: Repo & { fetch?: FetchLike; token: string | undefined }) => {
-  const get = getter(fetch, token)
+  const get: Get = requester(fetch, token)
 
   const [tags, pullRequests] = await Promise.all([
     fetchLatestReleaseTag({ owner, repo }, get),
@@ -189,6 +200,41 @@ export const fetchReleaseInputs = async ({
   ])
 
   return { pullRequests, tags }
+}
+
+/**
+ * The GitHub Release for a tag — the canonical changelog entry. GitHub writes
+ * the notes itself from the pull requests merged since the previous release,
+ * categorised by the same labels that drove the bump; the repo's
+ * `.github/release.yml` keys those categories.
+ *
+ * `commitish` names the commit to tag, and applies only when the tag does not
+ * exist yet: it is how dogfood mode gets a tag with no bump commit to hang one
+ * on. Publish mode leaves it out, because `npm version` has already made the
+ * tag and pushed it.
+ */
+export const createRelease = async ({
+  owner,
+  repo,
+  tag,
+  commitish,
+  fetch = globalThis.fetch,
+  token,
+}: Repo & {
+  tag: string
+  commitish?: string
+  fetch?: FetchLike
+  token: string | undefined
+}) => {
+  await requester(fetch, token)(`${API}/repos/${owner}/${repo}/releases`, {
+    method: 'POST',
+    body: JSON.stringify({
+      tag_name: tag,
+      name: tag,
+      generate_release_notes: true,
+      ...(commitish ? { target_commitish: commitish } : {}),
+    }),
+  })
 }
 
 /**

@@ -1,0 +1,18 @@
+# The categories GitHub sorts generated release notes into, keyed by the same
+# labels that drive the semver bump. GitHub Releases is the canonical changelog:
+# there is no CHANGELOG.md to keep in step with this.
+changelog:
+  exclude:
+    labels:
+      # Authorises CI runs, says nothing about the release.
+      - safe to test
+  categories:
+    - title: 💥 Breaking Changes
+      labels:
+        - breaking
+    - title: 🚀 Enhancements
+      labels:
+        - enhancement
+    - title: 🛠 Everything Else
+      labels:
+        - '*'

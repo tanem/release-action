@@ -8,8 +8,20 @@
  */
 
 import { appendFileSync } from 'node:fs'
-import { fetchReleaseInputs, resolveToken, type FetchLike } from './github.ts'
+import {
+  createRelease,
+  fetchReleaseInputs,
+  resolveToken,
+  type FetchLike,
+} from './github.ts'
 import { decideRelease } from './main.ts'
+import {
+  bumpVersion,
+  exec as execCommand,
+  publishPackage,
+  pushRelease,
+  type Exec,
+} from './workspace.ts'
 
 /** What the action reports back to the workflow that called it. */
 export interface Outputs {
@@ -18,22 +30,23 @@ export interface Outputs {
   version: string
 }
 
-type Env = Record<string, string | undefined>
+export type Env = Record<string, string | undefined>
 
 /**
  * A boolean action input, as the composite hands it over: the string `true` or
- * `false`, or nothing at all when the caller left the input at its default —
- * which for the one input read here, `dry-run`, is false.
+ * `false`, or nothing at all when the run came from somewhere other than the
+ * composite — a local invocation, say — in which case the action's own default
+ * for that input stands in.
  *
  * Anything else is a mistake in the calling workflow — most likely a YAML
  * spelling of true (`yes`, `on`) that Actions passed through verbatim — and
  * saying so beats quietly treating it as false.
  */
-const booleanInput = (name: string, env: Env) => {
+const booleanInput = (name: string, env: Env, fallback: boolean) => {
   const value = env[`INPUT_${name.toUpperCase().replaceAll('-', '_')}`]?.trim()
 
   if (!value) {
-    return false
+    return fallback
   }
 
   if (value !== 'true' && value !== 'false') {
@@ -59,6 +72,26 @@ const resolveRepo = (env: Env) => {
 }
 
 /**
+ * The commit this run checked out, which dogfood mode tags — it makes no bump
+ * commit, so the release has to name the commit it belongs to.
+ *
+ * Insisting on it rather than letting GitHub fall back to the default branch is
+ * deliberate: that fallback would silently tag whatever had landed since the
+ * run started.
+ */
+const resolveCheckedOutCommit = (env: Env) => {
+  const sha = env.GITHUB_SHA?.trim()
+
+  if (!sha) {
+    throw new Error(
+      'GITHUB_SHA must name the commit to tag when `publish` is false. The runner sets it; set it yourself to run this outside Actions.',
+    )
+  }
+
+  return sha
+}
+
+/**
  * Hands the outputs to the step that called the action. Outside a runner
  * nothing sets `GITHUB_OUTPUT` and there is no step to hand them to, so the
  * logged summary is the whole report.
@@ -76,30 +109,30 @@ export const writeOutputs = ({ status, version }: Outputs, env: Env) => {
  * The whole run: read the repo's tags and merged pull requests, decide what
  * this week releases, and either preview it or carry it out.
  *
- * `env`, `fetch` and `log` are parameters rather than ambient globals so the
- * tests can drive the flow hermetically — no network, no token, no runner.
+ * `env`, `fetch`, `exec` and `log` are parameters rather than ambient globals
+ * so the tests can drive the flow hermetically — no network, no token, no
+ * runner, and nothing shelled out.
  */
 export const run = async ({
   env,
   fetch = globalThis.fetch,
+  exec = execCommand,
   log = console.log,
 }: {
   env: Env
   fetch?: FetchLike
+  exec?: Exec
   log?: (message: string) => void
 }): Promise<Outputs> => {
-  const dryRun = booleanInput('dry-run', env)
+  const dryRun = booleanInput('dry-run', env, false)
+  const publish = booleanInput('publish', env, true)
   const { owner, repo } = resolveRepo(env)
+  const token = resolveToken({ env })
 
   log(`Deciding ${owner}/${repo}'s next release.`)
 
   const decision = decideRelease(
-    await fetchReleaseInputs({
-      owner,
-      repo,
-      fetch,
-      token: resolveToken({ env }),
-    }),
+    await fetchReleaseInputs({ owner, repo, fetch, token }),
   )
 
   if (decision.status === 'skipped') {
@@ -109,6 +142,7 @@ export const run = async ({
   }
 
   const { bump, version } = decision
+  const tag = `v${version}`
 
   if (dryRun) {
     log(`Dry run: would release ${version} (${bump} bump).`)
@@ -116,9 +150,30 @@ export const run = async ({
     return { status: 'released', version }
   }
 
-  throw new Error(
-    `Releasing ${version} (${bump} bump) is not implemented yet. Run the action with \`dry-run: true\` until it is.`,
-  )
+  const release = { owner, repo, tag, fetch, token }
+  const shell = { exec, env }
+
+  if (publish) {
+    log(`Releasing ${tag} (${bump} bump).`)
+
+    bumpVersion(version, shell)
+    pushRelease(shell)
+    // The tag has to reach the remote before the release is created: GitHub
+    // would otherwise create the tag itself, on the commit before the bump.
+    await createRelease(release)
+    publishPackage(shell)
+  } else {
+    log(`Releasing ${tag} (${bump} bump), publishing disabled: tag only.`)
+
+    // Nothing was committed, so there is no tag yet — creating the release is
+    // what makes one, on the commit this run checked out.
+    await createRelease({
+      ...release,
+      commitish: resolveCheckedOutCommit(env),
+    })
+  }
+
+  return { status: 'released', version }
 }
 
 if (import.meta.main) {
