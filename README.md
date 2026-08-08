@@ -34,6 +34,7 @@ on:
 permissions:
   contents: write
   id-token: write
+  pull-requests: read
 concurrency:
   group: ${{ github.workflow }}
 jobs:
@@ -59,7 +60,11 @@ build and tests run on, not the one the release runs on.
 The push reuses the credentials `actions/checkout` persists, so leave
 `persist-credentials` at its default in a publishing workflow. `contents: write`
 covers the push and the release; `id-token: write` is what npm's trusted
-publishing mints provenance from.
+publishing mints provenance from; `pull-requests: read` is how the bump gets
+derived. Spelling out a `permissions:` block sets every scope you leave out to
+`none`, so each of the three has to be listed — a public repo may well let the
+token read pull requests without being told to, but a release that depends on
+that is a release that fails on a Monday morning with nobody watching.
 
 ### Inputs
 
