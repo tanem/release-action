@@ -30,7 +30,7 @@ export const exec: Exec = (command, args, env) => {
  * always travel together, and injecting them is what lets the test suite watch
  * a whole release without running any of it.
  */
-export interface Shell {
+interface Shell {
   exec: Exec
   env: Env
 }

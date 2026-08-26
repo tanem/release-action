@@ -6,7 +6,7 @@
  */
 
 /** A semver increment. */
-export type Bump = 'patch' | 'minor' | 'major'
+type Bump = 'patch' | 'minor' | 'major'
 
 /**
  * The release-label convention, hardcoded by design — configurability was
@@ -15,13 +15,13 @@ export type Bump = 'patch' | 'minor' | 'major'
  * A Map rather than an object: labels are free text, and `toString` is a
  * legal label name.
  */
-export const BUMP_BY_LABEL: ReadonlyMap<string, Bump> = new Map([
+const BUMP_BY_LABEL: ReadonlyMap<string, Bump> = new Map([
   ['breaking', 'major'],
   ['enhancement', 'minor'],
 ])
 
 /** Applied by CI to authorise workflow runs — never counts as a release label. */
-export const IGNORED_LABEL = 'safe to test'
+const IGNORED_LABEL = 'safe to test'
 
 /** Strongest bump last, so the week's PRs can be reduced to their highest. */
 const BUMP_STRENGTH: Readonly<Record<Bump, number>> = {
@@ -45,7 +45,7 @@ export interface Tag {
 }
 
 /** What a release run should do, given the week's merged PRs. */
-export type ReleaseDecision =
+type ReleaseDecision =
   | { status: 'skipped' }
   | { status: 'released'; bump: Bump; version: string }
 
