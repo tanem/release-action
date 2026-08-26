@@ -24,7 +24,7 @@ import {
 } from './workspace.ts'
 
 /** What the action reports back to the workflow that called it. */
-export interface Outputs {
+interface Outputs {
   status: 'released' | 'skipped'
   /** The version released, or empty on a skipped week — there isn't one. */
   version: string
