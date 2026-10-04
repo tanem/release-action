@@ -30,18 +30,30 @@ const BUMP_STRENGTH: Readonly<Record<Bump, number>> = {
   major: 2,
 }
 
-/** A merged pull request, as much of one as the decision needs. */
+/**
+ * A merged pull request, as much of one as the decision needs.
+ *
+ * It carries the commit the merge put on the base branch and no `merged_at`:
+ * whether a pull request has been released is a question about where that
+ * commit sits in history, and timestamps play no part in answering it.
+ */
 export interface PullRequest {
   number: number
   title: string
   labels: { name: string }[]
-  merged_at: string
+  merge_commit_sha: string
 }
 
-/** A git tag and the date of the commit it points at. */
+/**
+ * A git tag and the commit it points at. No date: a release used to be dated
+ * by its tagged commit and compared against each pull request's `merged_at`,
+ * but GitHub can record `merged_at` a second after the merge commit's own
+ * committer date. A release that tagged a merge commit then saw that pull
+ * request as merged after it, and released it again on every later run.
+ */
 export interface Tag {
   name: string
-  date: string
+  sha: string
 }
 
 /** What a release run should do, given the week's merged PRs. */
@@ -72,9 +84,9 @@ const comparePrecedence = (a: Version, b: Version) =>
  * precedence, rather than the most recent by date, so that a tag pushed out of
  * order can never walk the version backwards.
  *
- * Generic over the tag shape so the API layer can run it over raw GitHub tags,
- * which carry a commit but no date until one is looked up. The parsed version
- * comes back with the tag, so no caller has to parse the name a second time.
+ * Generic over the tag shape so the API layer can run it over raw GitHub tags
+ * as they come off the wire. The parsed version comes back with the tag, so no
+ * caller has to parse the name a second time.
  */
 export const highestReleaseTag = <T extends { name: string }>(
   tags: readonly T[],
@@ -133,24 +145,36 @@ const releaseLabel = (pullRequest: PullRequest) => {
 }
 
 /**
- * The whole release decision, as a pure function of the repo's merged PRs and
- * tags: the next version to release, a clean skip, or a thrown guardrail
- * violation naming the PR that caused it.
+ * The whole release decision, as a pure function of the repo's merged PRs,
+ * its tags and its history: the next version to release, a clean skip, or a
+ * thrown guardrail violation naming the PR that caused it.
+ *
+ * `unreleasedCommits` is the history: the commits reachable from the commit
+ * being released but not from the highest release tag. A pull request is in
+ * this release when its merge commit is one of them. That leaves out the pull
+ * requests already released, whose merge commits are the tagged commit or an
+ * ancestor of it, and the ones merged into some other branch, which the
+ * release commit never reaches.
+ *
+ * Ancestry rather than dates, because the dates do not agree with each other:
+ * see `Tag`.
  */
 export const decideRelease = ({
   pullRequests,
   tags,
+  unreleasedCommits,
 }: {
   pullRequests: PullRequest[]
   tags: Tag[]
+  unreleasedCommits: ReadonlySet<string>
 }): ReleaseDecision => {
   const latest = highestReleaseTag(tags)
 
-  // Everything merged since the last release — or everything ever merged, on a
-  // repo that has yet to cut one.
+  // A repo that has yet to cut a release has no tag to compare against, so
+  // everything ever merged is unreleased and the commit set goes unread.
   const unreleased = latest
-    ? pullRequests.filter(
-        ({ merged_at }) => Date.parse(merged_at) > Date.parse(latest.tag.date),
+    ? pullRequests.filter(({ merge_commit_sha }) =>
+        unreleasedCommits.has(merge_commit_sha),
       )
     : pullRequests
 

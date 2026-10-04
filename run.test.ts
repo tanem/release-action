@@ -10,6 +10,7 @@ import {
   page,
   PULLS_URL,
   releaseCreated,
+  releasedAs,
   RELEASES_URL,
   stubFetch,
 } from './fixtures.ts'
@@ -26,6 +27,28 @@ const firstRelease = (labels: string[] = ['enhancement']) =>
   })
 
 const quietWeek = () => stubFetch({ ...noTags(), ...noPulls() })
+
+const TAGGED_COMMIT = 'sha-of-v1.2.3'
+
+/**
+ * A repo last released as v1.2.3. `head` is the commit the run is expected to
+ * release and `unreleased` the commits between the tag and it — a run that
+ * compared against a different commit would fail on an unexpected request.
+ */
+const taggedRepo = ({
+  head,
+  unreleased,
+  pulls,
+}: {
+  head: string
+  unreleased: string[]
+  pulls: ReturnType<typeof apiPull>[]
+}) =>
+  stubFetch({
+    ...releasedAs({ name: 'v1.2.3', sha: TAGGED_COMMIT }, { head, unreleased }),
+    [PULLS_URL]: page(pulls),
+    ...releaseCreated(),
+  })
 
 /**
  * Every case sets `GH_TOKEN`, which short-circuits the token resolution before
@@ -140,9 +163,17 @@ describe('a dry run', () => {
   })
 
   test('asks the API for nothing but reads', async () => {
-    const { fetch, calls } = firstRelease()
+    // A tagged repo, so the compare is among the requests being checked.
+    const { fetch, calls } = taggedRepo({
+      head: 'HEAD',
+      unreleased: ['merge-sha-1'],
+      pulls: [apiPull(1, ['enhancement'])],
+    })
 
-    await runCollecting(ENV, fetch)
+    const { outputs } = await runCollecting(ENV, fetch)
+
+    assert.deepEqual(outputs, { status: 'released', version: '1.3.0' })
+    assert.ok(calls.some(({ url }) => url.includes('/compare/')))
 
     // A request that named a method or carried a body would mean something in
     // the run had started writing — `fetch` defaults to GET with no body.
@@ -150,6 +181,83 @@ describe('a dry run', () => {
       assert.equal(method, undefined)
       assert.equal(body, undefined)
     }
+  })
+})
+
+describe('a pull request already released', () => {
+  test('is not released again when `merged_at` trails its merge commit by a second', async () => {
+    // The report: a dogfood release tagged the merge commit of the last pull
+    // request it shipped, committed at 06:36:55Z, and GitHub recorded that
+    // pull request as merged at 06:36:56Z. Dated, it looked unreleased on
+    // every later run.
+    const { fetch: base } = taggedRepo({
+      head: 'sha-of-the-run',
+      unreleased: [],
+      pulls: [
+        apiPull(8, ['enhancement'], '2026-08-08T06:36:56Z', TAGGED_COMMIT),
+      ],
+    })
+    const { exec, fetch, journal } = recording(base)
+
+    const { outputs } = await runCollecting(DOGFOODING, fetch, exec)
+
+    assert.deepEqual(outputs, { status: 'skipped', version: '' })
+    assert.deepEqual(journal, [])
+  })
+})
+
+describe('a pull request merged since the last release', () => {
+  test('is released, its label deciding the bump', async () => {
+    const { fetch: base } = taggedRepo({
+      head: 'sha-of-the-run',
+      unreleased: ['sha-of-a-direct-push', 'merge-sha-9'],
+      pulls: [
+        // Already released, so its stronger label must not reach the bump.
+        apiPull(8, ['breaking'], '2026-08-08T06:36:56Z', TAGGED_COMMIT),
+        apiPull(9, ['enhancement']),
+      ],
+    })
+    const { exec, fetch, journal } = recording(base)
+
+    const { outputs } = await runCollecting(DOGFOODING, fetch, exec)
+
+    assert.deepEqual(outputs, { status: 'released', version: '1.3.0' })
+    assert.deepEqual(journal[0]?.body, {
+      tag_name: 'v1.3.0',
+      name: 'v1.3.0',
+      generate_release_notes: true,
+      target_commitish: 'sha-of-the-run',
+    })
+  })
+})
+
+describe('the commit a run compares the last release against', () => {
+  const unreleased = (head: string) =>
+    taggedRepo({
+      head,
+      unreleased: ['merge-sha-1'],
+      pulls: [apiPull(1, ['bug'])],
+    })
+
+  test('is the one the runner checked out, when publishing too', async () => {
+    const { fetch: base } = unreleased('sha-of-the-run')
+    const { exec, fetch } = recording(base)
+
+    const { outputs } = await runCollecting(
+      { ...RELEASING, GITHUB_SHA: 'sha-of-the-run' },
+      fetch,
+      exec,
+    )
+
+    assert.deepEqual(outputs, { status: 'released', version: '1.2.4' })
+  })
+
+  test('is the default branch outside a runner, which checked nothing out', async () => {
+    const { fetch } = unreleased('HEAD')
+
+    const { outputs } = await runCollecting(ENV, fetch)
+
+    assert.deepEqual(outputs, { status: 'released', version: '1.2.4' })
   })
 })
 

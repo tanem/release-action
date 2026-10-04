@@ -37,8 +37,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Nothing in this run reads git history — the tags are read over the
-          # API and the release creates its own tag. Checking out in full
+          # Nothing in this run reads the checkout's history — the tags and the
+          # commits since the last release are read over the API, and the
+          # release creates its own tag. Checking out in full
           # anyway keeps the dogfood run from being a lighter checkout than the
           # fleet's, which is the one difference that could hide a failure.
           fetch-depth: 0
