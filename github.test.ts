@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import {
+  apiComparison,
   apiPull,
   apiTag,
-  commitUrl,
+  compareUrl,
   noPulls,
   noTags,
   page,
   PULLS_URL,
   releaseCreated,
+  releasedAs,
   RELEASES_URL,
   REPO,
   stubFetch,
@@ -27,20 +29,47 @@ describe('pagination', () => {
       // The highest tag sits on the last page: stopping early would base the
       // next version on a stale release.
       [thirdPage]: page([apiTag('v2.0.0', 'sha-3')]),
-      [commitUrl('sha-3')]: page({
-        commit: { committer: { date: '2026-01-01T00:00:00Z' } },
-      }),
+      [compareUrl('sha-3', 'HEAD')]: page(apiComparison([])),
       ...noPulls(),
     })
 
     const { tags } = await fetchReleaseInputs({
       ...REPO,
+      head: undefined,
       fetch,
       token: undefined,
     })
 
-    assert.deepEqual(tags, [{ name: 'v2.0.0', date: '2026-01-01T00:00:00Z' }])
+    assert.deepEqual(tags, [{ name: 'v2.0.0', sha: 'sha-3' }])
     assert.ok(calls.some(({ url }) => url === thirdPage))
+  })
+
+  test('walks `Link` headers to completion for the compare', async () => {
+    const firstPage = compareUrl('sha-1', 'HEAD')
+    const secondPage = `${firstPage}&page=2`
+    const thirdPage = `${firstPage}&page=3`
+
+    const { fetch } = stubFetch({
+      [TAGS_URL]: page([apiTag('v1.0.0', 'sha-1')]),
+      [firstPage]: page(apiComparison(['sha-2', 'sha-3']), secondPage),
+      [secondPage]: page(apiComparison(['sha-4']), thirdPage),
+      // A merge commit on the last page: stopping early would leave its pull
+      // request out of the release and derive the wrong bump.
+      [thirdPage]: page(apiComparison(['sha-5'])),
+      ...noPulls(),
+    })
+
+    const { unreleasedCommits } = await fetchReleaseInputs({
+      ...REPO,
+      head: undefined,
+      fetch,
+      token: undefined,
+    })
+
+    assert.deepEqual(
+      [...unreleasedCommits],
+      ['sha-2', 'sha-3', 'sha-4', 'sha-5'],
+    )
   })
 
   test('walks `Link` headers to completion for merged pull requests', async () => {
@@ -54,6 +83,7 @@ describe('pagination', () => {
 
     const { pullRequests } = await fetchReleaseInputs({
       ...REPO,
+      head: undefined,
       fetch,
       token: undefined,
     })
@@ -71,7 +101,12 @@ describe('pagination', () => {
     })
 
     await assert.rejects(
-      fetchReleaseInputs({ ...REPO, fetch, token: undefined }),
+      fetchReleaseInputs({
+        ...REPO,
+        head: undefined,
+        fetch,
+        token: undefined,
+      }),
       /looped back/,
     )
   })
@@ -89,6 +124,7 @@ describe('the pull requests it returns', () => {
 
     const { pullRequests } = await fetchReleaseInputs({
       ...REPO,
+      head: undefined,
       fetch,
       token: undefined,
     })
@@ -98,7 +134,7 @@ describe('the pull requests it returns', () => {
         number: 1,
         title: 'PR 1',
         labels: [{ name: 'enhancement' }, { name: 'safe to test' }],
-        merged_at: '2026-02-01T00:00:00Z',
+        merge_commit_sha: 'merge-sha-1',
       },
     ])
   })
@@ -106,7 +142,7 @@ describe('the pull requests it returns', () => {
 
 describe('the tags it returns', () => {
   test('are empty when the repo has no release tag yet', async () => {
-    const { fetch, calls } = stubFetch({
+    const { fetch } = stubFetch({
       [TAGS_URL]: page([
         apiTag('nightly', 'sha-1'),
         apiTag('v2.0.0-beta.1', 'sha-2'),
@@ -116,39 +152,90 @@ describe('the tags it returns', () => {
 
     const { tags } = await fetchReleaseInputs({
       ...REPO,
+      head: undefined,
       fetch,
       token: undefined,
     })
 
     assert.deepEqual(tags, [])
-    // No release tag means no commit worth dating.
-    assert.deepEqual(
-      calls.filter(({ url }) => url.includes('/commits/')),
-      [],
-    )
   })
 
-  test('date only the highest release tag, whatever order tags arrive in', async () => {
-    const { fetch, calls } = stubFetch({
+  test('are the highest release tag alone, whatever order tags arrive in', async () => {
+    const { fetch } = stubFetch({
       [TAGS_URL]: page([
         apiTag('v1.9.0', 'sha-1'),
         apiTag('v1.10.0', 'sha-2'),
         apiTag('v1.2.3', 'sha-3'),
       ]),
-      [commitUrl('sha-2')]: page({
-        commit: { committer: { date: '2026-01-01T00:00:00Z' } },
-      }),
+      [compareUrl('sha-2', 'HEAD')]: page(apiComparison([])),
       ...noPulls(),
     })
 
     const { tags } = await fetchReleaseInputs({
       ...REPO,
+      head: undefined,
       fetch,
       token: undefined,
     })
 
-    assert.deepEqual(tags, [{ name: 'v1.10.0', date: '2026-01-01T00:00:00Z' }])
-    assert.equal(calls.filter(({ url }) => url.includes('/commits/')).length, 1)
+    assert.deepEqual(tags, [{ name: 'v1.10.0', sha: 'sha-2' }])
+  })
+})
+
+describe('the unreleased commits it returns', () => {
+  const tagged = (head: string) =>
+    stubFetch({
+      ...releasedAs(
+        { name: 'v1.0.0', sha: 'sha-1' },
+        { head, unreleased: ['sha-2', 'sha-3'] },
+      ),
+      ...noPulls(),
+    })
+
+  test('are the ones between the highest release tag and the head it was given', async () => {
+    // The stub answers this compare and no other, so a base or a head other
+    // than these two would be an unexpected request.
+    const { fetch } = tagged('sha-of-the-run')
+
+    const { unreleasedCommits } = await fetchReleaseInputs({
+      ...REPO,
+      head: 'sha-of-the-run',
+      fetch,
+      token: undefined,
+    })
+
+    assert.deepEqual([...unreleasedCommits], ['sha-2', 'sha-3'])
+  })
+
+  test('are compared against the default branch when there is no head', async () => {
+    const { fetch } = tagged('HEAD')
+
+    const { unreleasedCommits } = await fetchReleaseInputs({
+      ...REPO,
+      head: undefined,
+      fetch,
+      token: undefined,
+    })
+
+    assert.deepEqual([...unreleasedCommits], ['sha-2', 'sha-3'])
+  })
+
+  test('are empty, and never asked for, when the repo has no release tag yet', async () => {
+    const { fetch, calls } = stubFetch({ ...noTags(), ...noPulls() })
+
+    const { unreleasedCommits } = await fetchReleaseInputs({
+      ...REPO,
+      head: 'sha-of-the-run',
+      fetch,
+      token: undefined,
+    })
+
+    assert.deepEqual([...unreleasedCommits], [])
+    // No release tag means nothing to compare the head against.
+    assert.deepEqual(
+      calls.filter(({ url }) => url.includes('/compare/')),
+      [],
+    )
   })
 })
 
@@ -156,7 +243,12 @@ describe('requests', () => {
   test('carry the GitHub API headers and a bearer token when there is one', async () => {
     const { fetch, calls } = stubFetch({ ...noTags(), ...noPulls() })
 
-    await fetchReleaseInputs({ ...REPO, fetch, token: 'ghs_secret' })
+    await fetchReleaseInputs({
+      ...REPO,
+      head: undefined,
+      fetch,
+      token: 'ghs_secret',
+    })
 
     for (const { headers } of calls) {
       assert.equal(headers['authorization'], 'Bearer ghs_secret')
@@ -169,7 +261,12 @@ describe('requests', () => {
   test('are unauthenticated when there is no token', async () => {
     const { fetch, calls } = stubFetch({ ...noTags(), ...noPulls() })
 
-    await fetchReleaseInputs({ ...REPO, fetch, token: undefined })
+    await fetchReleaseInputs({
+      ...REPO,
+      head: undefined,
+      fetch,
+      token: undefined,
+    })
 
     for (const { headers } of calls) {
       assert.equal(headers['authorization'], undefined)
@@ -186,7 +283,12 @@ describe('requests', () => {
     })
 
     await assert.rejects(
-      fetchReleaseInputs({ ...REPO, fetch, token: undefined }),
+      fetchReleaseInputs({
+        ...REPO,
+        head: undefined,
+        fetch,
+        token: undefined,
+      }),
       /\/tags.*401.*Bad credentials/s,
     )
   })

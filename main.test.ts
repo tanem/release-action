@@ -2,28 +2,32 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { decideRelease, type PullRequest, type Tag } from './main.ts'
 
-const AFTER_LATEST_TAG = '2026-02-01T00:00:00Z'
+/** A commit on the release commit's side of the latest tag. */
+const SINCE_LATEST_TAG = 'sha-since-latest-tag'
 
 const pull = (
   number: number,
   labels: string[],
-  mergedAt = AFTER_LATEST_TAG,
+  mergeCommitSha = SINCE_LATEST_TAG,
 ): PullRequest => ({
   number,
   title: `PR ${number}`,
   labels: labels.map((name) => ({ name })),
-  merged_at: mergedAt,
+  merge_commit_sha: mergeCommitSha,
 })
 
-const tag = (name: string, date: string): Tag => ({ name, date })
+const tag = (name: string): Tag => ({ name, sha: `sha-of-${name}` })
 
-const TAGS = [tag('v1.2.3', '2026-01-01T00:00:00Z')]
+const TAGS = [tag('v1.2.3')]
+
+const UNRELEASED_COMMITS = new Set([SINCE_LATEST_TAG])
 
 describe('label to bump mapping', () => {
   test('`breaking` releases a major', () => {
     const decision = decideRelease({
       pullRequests: [pull(1, ['breaking'])],
       tags: TAGS,
+      unreleasedCommits: UNRELEASED_COMMITS,
     })
 
     assert.deepEqual(decision, {
@@ -37,6 +41,7 @@ describe('label to bump mapping', () => {
     const decision = decideRelease({
       pullRequests: [pull(1, ['enhancement'])],
       tags: TAGS,
+      unreleasedCommits: UNRELEASED_COMMITS,
     })
 
     assert.deepEqual(decision, {
@@ -51,6 +56,7 @@ describe('label to bump mapping', () => {
       const decision = decideRelease({
         pullRequests: [pull(1, [label])],
         tags: TAGS,
+        unreleasedCommits: UNRELEASED_COMMITS,
       })
 
       assert.deepEqual(decision, {
@@ -65,6 +71,7 @@ describe('label to bump mapping', () => {
     const decision = decideRelease({
       pullRequests: [pull(1, ['toString'])],
       tags: TAGS,
+      unreleasedCommits: UNRELEASED_COMMITS,
     })
 
     assert.deepEqual(decision, {
@@ -78,6 +85,7 @@ describe('label to bump mapping', () => {
     const patchAndMinor = decideRelease({
       pullRequests: [pull(1, ['bug']), pull(2, ['enhancement'])],
       tags: TAGS,
+      unreleasedCommits: UNRELEASED_COMMITS,
     })
 
     assert.deepEqual(patchAndMinor, {
@@ -93,6 +101,7 @@ describe('label to bump mapping', () => {
         pull(3, ['breaking']),
       ],
       tags: TAGS,
+      unreleasedCommits: UNRELEASED_COMMITS,
     })
 
     assert.deepEqual(allThree, {
@@ -108,6 +117,7 @@ describe('the `safe to test` label', () => {
     const decision = decideRelease({
       pullRequests: [pull(1, ['safe to test', 'enhancement'])],
       tags: TAGS,
+      unreleasedCommits: UNRELEASED_COMMITS,
     })
 
     assert.deepEqual(decision, {
@@ -123,6 +133,7 @@ describe('the `safe to test` label', () => {
         decideRelease({
           pullRequests: [pull(7, ['safe to test'])],
           tags: TAGS,
+          unreleasedCommits: UNRELEASED_COMMITS,
         }),
       /#7.*no release label/s,
     )
@@ -136,6 +147,7 @@ describe('guardrails', () => {
         decideRelease({
           pullRequests: [pull(1, ['bug']), pull(42, [])],
           tags: TAGS,
+          unreleasedCommits: UNRELEASED_COMMITS,
         }),
       /#42.*no release label/s,
     )
@@ -147,6 +159,7 @@ describe('guardrails', () => {
         decideRelease({
           pullRequests: [pull(42, ['bug', 'enhancement'])],
           tags: TAGS,
+          unreleasedCommits: UNRELEASED_COMMITS,
         }),
       /#42.*more than one release label.*bug.*enhancement/s,
     )
@@ -155,10 +168,11 @@ describe('guardrails', () => {
   test('only apply to the PRs in this release', () => {
     const decision = decideRelease({
       pullRequests: [
-        pull(1, [], '2025-12-01T00:00:00Z'),
+        pull(1, [], 'sha-before-latest-tag'),
         pull(2, ['enhancement']),
       ],
       tags: TAGS,
+      unreleasedCommits: UNRELEASED_COMMITS,
     })
 
     assert.deepEqual(decision, {
@@ -171,29 +185,80 @@ describe('guardrails', () => {
 
 describe('skipping', () => {
   test('a week with no merged PRs is a clean skip', () => {
-    assert.deepEqual(decideRelease({ pullRequests: [], tags: TAGS }), {
-      status: 'skipped',
+    assert.deepEqual(
+      decideRelease({
+        pullRequests: [],
+        tags: TAGS,
+        unreleasedCommits: UNRELEASED_COMMITS,
+      }),
+      { status: 'skipped' },
+    )
+  })
+
+  test('a PR whose merge commit is the tagged commit is already released', () => {
+    assert.deepEqual(
+      decideRelease({
+        pullRequests: [pull(1, ['enhancement'], 'sha-of-v1.2.3')],
+        tags: TAGS,
+        unreleasedCommits: UNRELEASED_COMMITS,
+      }),
+      { status: 'skipped' },
+    )
+  })
+
+  test('a PR whose merge commit is an ancestor of the tagged commit is already released', () => {
+    assert.deepEqual(
+      decideRelease({
+        pullRequests: [pull(1, ['enhancement'], 'sha-before-latest-tag')],
+        tags: TAGS,
+        unreleasedCommits: UNRELEASED_COMMITS,
+      }),
+      { status: 'skipped' },
+    )
+  })
+
+  test('a PR merged into another branch is not part of this release', () => {
+    assert.deepEqual(
+      decideRelease({
+        pullRequests: [pull(1, ['breaking'], 'sha-on-another-branch')],
+        tags: TAGS,
+        unreleasedCommits: UNRELEASED_COMMITS,
+      }),
+      { status: 'skipped' },
+    )
+  })
+
+  test('a tagged repo with no commits since the tag is a clean skip', () => {
+    assert.deepEqual(
+      decideRelease({
+        pullRequests: [pull(1, ['enhancement'])],
+        tags: TAGS,
+        unreleasedCommits: new Set(),
+      }),
+      { status: 'skipped' },
+    )
+  })
+})
+
+describe('the pull requests in a release', () => {
+  test('are the ones whose merge commits follow the latest tag', () => {
+    const decision = decideRelease({
+      pullRequests: [
+        pull(1, ['breaking'], 'sha-before-latest-tag'),
+        pull(2, ['bug'], 'sha-a'),
+        pull(3, ['enhancement'], 'sha-b'),
+        pull(4, ['breaking'], 'sha-on-another-branch'),
+      ],
+      tags: TAGS,
+      unreleasedCommits: new Set(['sha-a', 'sha-b', 'sha-of-a-direct-push']),
     })
-  })
 
-  test('PRs merged before the latest tag are already released', () => {
-    assert.deepEqual(
-      decideRelease({
-        pullRequests: [pull(1, ['enhancement'], '2025-12-01T00:00:00Z')],
-        tags: TAGS,
-      }),
-      { status: 'skipped' },
-    )
-  })
-
-  test('a PR merged at the exact tag timestamp is already released', () => {
-    assert.deepEqual(
-      decideRelease({
-        pullRequests: [pull(1, ['enhancement'], '2026-01-01T00:00:00Z')],
-        tags: TAGS,
-      }),
-      { status: 'skipped' },
-    )
+    // The two `breaking` PRs sit outside the compare, so neither is counted.
+    assert.deepEqual(decision, {
+      status: 'released',
+      bump: 'minor',
+      version: '1.3.0',
+    })
   })
 })
 
@@ -201,11 +266,8 @@ describe('the base version', () => {
   test('comes from the highest semver tag, whatever order tags arrive in', () => {
     const decision = decideRelease({
       pullRequests: [pull(1, ['bug'])],
-      tags: [
-        tag('v1.9.0', '2025-11-01T00:00:00Z'),
-        tag('v1.10.0', '2026-01-01T00:00:00Z'),
-        tag('v1.2.3', '2025-10-01T00:00:00Z'),
-      ],
+      tags: [tag('v1.9.0'), tag('v1.10.0'), tag('v1.2.3')],
+      unreleasedCommits: UNRELEASED_COMMITS,
     })
 
     assert.deepEqual(decision, {
@@ -218,7 +280,8 @@ describe('the base version', () => {
   test('accepts tags with and without a `v` prefix', () => {
     const decision = decideRelease({
       pullRequests: [pull(1, ['bug'])],
-      tags: [tag('8.0.8', '2026-01-01T00:00:00Z')],
+      tags: [tag('8.0.8')],
+      unreleasedCommits: UNRELEASED_COMMITS,
     })
 
     assert.deepEqual(decision, {
@@ -231,11 +294,8 @@ describe('the base version', () => {
   test('ignores tags that are not semver releases', () => {
     const decision = decideRelease({
       pullRequests: [pull(1, ['bug'])],
-      tags: [
-        tag('v1.2.3', '2026-01-01T00:00:00Z'),
-        tag('nightly', '2026-01-15T00:00:00Z'),
-        tag('v2.0.0-beta.1', '2026-01-20T00:00:00Z'),
-      ],
+      tags: [tag('v1.2.3'), tag('nightly'), tag('v2.0.0-beta.1')],
+      unreleasedCommits: UNRELEASED_COMMITS,
     })
 
     assert.deepEqual(decision, {
@@ -249,6 +309,7 @@ describe('the base version', () => {
     const decision = decideRelease({
       pullRequests: [pull(1, ['enhancement'])],
       tags: [],
+      unreleasedCommits: new Set(),
     })
 
     assert.deepEqual(decision, {
@@ -258,10 +319,11 @@ describe('the base version', () => {
     })
   })
 
-  test('an untagged repo releases merged PRs of any age', () => {
+  test('an untagged repo releases every merged PR, with no compare to consult', () => {
     const decision = decideRelease({
-      pullRequests: [pull(1, ['bug'], '2019-01-01T00:00:00Z')],
+      pullRequests: [pull(1, ['bug'], 'sha-of-any-commit')],
       tags: [],
+      unreleasedCommits: new Set(),
     })
 
     assert.deepEqual(decision, {

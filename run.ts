@@ -72,15 +72,23 @@ const resolveRepo = (env: Env) => {
 }
 
 /**
- * The commit this run checked out, which dogfood mode tags — it makes no bump
- * commit, so the release has to name the commit it belongs to.
+ * The commit this run checked out, which is the commit it releases: the last
+ * release is compared against it to find what has been merged since. Nothing
+ * outside a runner, where a laptop dry run has no checkout and the comparison
+ * falls back to the default branch.
+ */
+const checkedOutCommit = (env: Env) => env.GITHUB_SHA?.trim() || undefined
+
+/**
+ * The commit dogfood mode tags — it makes no bump commit, so the release has
+ * to name the commit it belongs to.
  *
  * Insisting on it rather than letting GitHub fall back to the default branch is
  * deliberate: that fallback would silently tag whatever had landed since the
  * run started.
  */
-const resolveCheckedOutCommit = (env: Env) => {
-  const sha = env.GITHUB_SHA?.trim()
+const resolveCommitToTag = (env: Env) => {
+  const sha = checkedOutCommit(env)
 
   if (!sha) {
     throw new Error(
@@ -106,8 +114,9 @@ export const writeOutputs = ({ status, version }: Outputs, env: Env) => {
 }
 
 /**
- * The whole run: read the repo's tags and merged pull requests, decide what
- * this week releases, and either preview it or carry it out.
+ * The whole run: read the repo's tags, merged pull requests and the commits
+ * since its last release, decide what this week releases, and either preview
+ * it or carry it out.
  *
  * `env`, `fetch`, `exec` and `log` are parameters rather than ambient globals
  * so the tests can drive the flow hermetically — no network, no token, no
@@ -132,7 +141,13 @@ export const run = async ({
   log(`Deciding ${owner}/${repo}'s next release.`)
 
   const decision = decideRelease(
-    await fetchReleaseInputs({ owner, repo, fetch, token }),
+    await fetchReleaseInputs({
+      owner,
+      repo,
+      head: checkedOutCommit(env),
+      fetch,
+      token,
+    }),
   )
 
   if (decision.status === 'skipped') {
@@ -169,7 +184,7 @@ export const run = async ({
     // what makes one, on the commit this run checked out.
     await createRelease({
       ...release,
-      commitish: resolveCheckedOutCommit(env),
+      commitish: resolveCommitToTag(env),
     })
   }
 

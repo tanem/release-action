@@ -30,10 +30,20 @@ interface ApiPullRequest {
   labels: { name: string }[]
   /** `null` on a pull request that was closed without merging. */
   merged_at: string | null
+  /**
+   * The commit the merge put on the base branch, whichever way it was merged:
+   * the merge commit, the squashed commit, or the last of the rebased ones.
+   * Always set once merged. It says nothing about whether a pull request was
+   * merged, though: an unmerged one keeps the test merge GitHub last computed,
+   * or `null` where there was none. Typed as set because it is only read once
+   * `merged_at` has said the pull request merged.
+   */
+  merge_commit_sha: string
 }
 
-interface ApiCommit {
-  commit: { committer: { date: string } }
+/** A compare is an object holding its page of commits, not a bare array. */
+interface ApiComparison {
+  commits: { sha: string }[]
 }
 
 /**
@@ -84,14 +94,21 @@ const NEXT_PAGE = /<([^>]+)>\s*;\s*rel="next"/
 /**
  * Every page of a listing endpoint, walked to completion before anything
  * filters the result. Stopping early — at a page limit, or at the first page
- * that looks uninteresting — would silently drop tags or pull requests and so
- * derive the wrong bump.
+ * that looks uninteresting — would silently drop tags, commits or pull
+ * requests and so derive the wrong bump.
  *
  * The only thing that ends the walk short is a `Link` header that cycles back
  * to a page already fetched, which would otherwise hang an unattended weekly
  * run forever.
+ *
+ * `itemsOf` picks the items out of a page, for the endpoints that wrap them in
+ * an object. Most answer with the array itself.
  */
-const paginate = async <T>(url: string, get: Get) => {
+const paginate = async <T>(
+  url: string,
+  get: Get,
+  itemsOf: (page: unknown) => T[] = (page) => page as T[],
+) => {
   const items: T[] = []
   const seen = new Set<string>()
   let next: string | undefined = url
@@ -105,7 +122,7 @@ const paginate = async <T>(url: string, get: Get) => {
 
     const response = await get(next)
 
-    items.push(...((await response.json()) as T[]))
+    items.push(...itemsOf(await response.json()))
     next = NEXT_PAGE.exec(response.headers.get('link') ?? '')?.[1]
   }
 
@@ -118,20 +135,18 @@ interface Repo {
 }
 
 /**
- * The repo's latest release tag, dated by the commit it points at — which is
- * when the released code was committed rather than when the tag was pushed,
- * the same contract the decision core's `Tag` documents.
+ * The repo's latest release tag and the commit it points at, or nothing on a
+ * repo that has yet to cut a release.
  *
- * Only the highest tag is dated, because dating a tag costs a request per tag
- * — the listing endpoint returns a commit SHA, not a date — and the decision
- * core reasons over the latest release alone. A repo with no release tag yet
- * returns nothing, and the caller treats every merged pull request as
- * unreleased.
+ * The commit is all the tag is needed for: it is the base of the compare
+ * below. It used to be looked up for its date, which the decision core
+ * compared against each pull request's `merged_at` — see `Tag` for why that
+ * comparison was abandoned.
  */
 const fetchLatestReleaseTag = async (
   { owner, repo }: Repo,
   get: Get,
-): Promise<Tag[]> => {
+): Promise<Tag | undefined> => {
   const tags = await paginate<ApiTag>(
     `${API}/repos/${owner}/${repo}/tags?per_page=100`,
     get,
@@ -139,21 +154,72 @@ const fetchLatestReleaseTag = async (
 
   const latest = highestReleaseTag(tags)
 
-  if (!latest) {
-    return []
-  }
+  return latest && { name: latest.tag.name, sha: latest.tag.commit.sha }
+}
 
-  const commit = (await (
-    await get(`${API}/repos/${owner}/${repo}/commits/${latest.tag.commit.sha}`)
-  ).json()) as ApiCommit
+/**
+ * The remote's own `HEAD`, which is its default branch. It stands in for the
+ * commit being released on a run that has no checkout to name — a dry run from
+ * a laptop — and costs no request to resolve.
+ */
+const DEFAULT_BRANCH = 'HEAD'
 
-  return [{ name: latest.tag.name, date: commit.commit.committer.date }]
+/**
+ * The commits reachable from `head` but not from the latest release tag: what
+ * this release adds to the last one. The decision core counts a pull request
+ * when its merge commit is among them.
+ *
+ * The base is the tag's commit rather than its name, so a branch that happens
+ * to share the name cannot be compared against by mistake.
+ *
+ * Paged explicitly, and walked to the end: asked for without paging, a compare
+ * answers with a `commits` array that stops at the first 250.
+ */
+const fetchUnreleasedCommits = async (
+  { owner, repo }: Repo,
+  { base, head }: { base: string; head: string },
+  get: Get,
+): Promise<ReadonlySet<string>> => {
+  const commits = await paginate(
+    `${API}/repos/${owner}/${repo}/compare/${base}...${head}?per_page=100`,
+    get,
+    (page) => (page as ApiComparison).commits,
+  )
+
+  return new Set(commits.map(({ sha }) => sha))
+}
+
+/**
+ * The latest release tag and what has been committed since, which depend on
+ * each other: there is nothing to compare until the tag is known, and nothing
+ * to compare against on a repo with no release tag at all.
+ */
+const fetchTagAndUnreleasedCommits = async (
+  repo: Repo,
+  head: string | undefined,
+  get: Get,
+) => {
+  const latest = await fetchLatestReleaseTag(repo, get)
+
+  return latest
+    ? {
+        tags: [latest],
+        unreleasedCommits: await fetchUnreleasedCommits(
+          repo,
+          { base: latest.sha, head: head ?? DEFAULT_BRANCH },
+          get,
+        ),
+      }
+    : { tags: [], unreleasedCommits: new Set<string>() }
 }
 
 /**
  * Every merged pull request the repo has, shaped for the decision core, which
  * discards the ones already released. Closed-without-merging pull requests are
  * dropped here — they were never part of any release.
+ *
+ * `merged_at` is read for that and nothing else. It is not passed on, because
+ * it is not a reliable account of when a merge commit was made.
  */
 const fetchMergedPullRequests = async (
   { owner, repo }: Repo,
@@ -164,24 +230,32 @@ const fetchMergedPullRequests = async (
     get,
   )
 
-  return pullRequests.flatMap(({ number, title, labels, merged_at }) =>
-    merged_at === null
-      ? []
-      : [
-          {
-            number,
-            title,
-            labels: labels.map(({ name }) => ({ name })),
-            merged_at,
-          },
-        ],
+  return pullRequests.flatMap(
+    ({ number, title, labels, merged_at, merge_commit_sha }) =>
+      merged_at === null
+        ? []
+        : [
+            {
+              number,
+              title,
+              labels: labels.map(({ name }) => ({ name })),
+              merge_commit_sha,
+            },
+          ],
   )
 }
 
 /**
- * Everything `decideRelease` needs about a repo, in one round of requests.
- * `tags` holds the latest release tag alone, or nothing on a repo that has yet
- * to cut a release — the older tags cannot change the decision.
+ * Everything `decideRelease` needs about a repo, read and never written: every
+ * request here is a GET, which is what lets a dry run call it. `tags` holds
+ * the latest release tag alone, or nothing on a repo that has yet to cut a
+ * release — the older tags cannot change the decision.
+ *
+ * `head` is the commit being released, and `unreleasedCommits` are the ones
+ * between the latest release tag and it. Like `token` it is required but may
+ * be `undefined`, which compares against the default branch instead: right for
+ * a run with no checkout, and wrong for a run that has one, where the default
+ * branch may have moved on since the checkout was made.
  *
  * `token` is required but may be `undefined`: the caller chooses between
  * `resolveToken()` and a deliberate unauthenticated read. Defaulting it either
@@ -190,17 +264,22 @@ const fetchMergedPullRequests = async (
 export const fetchReleaseInputs = async ({
   owner,
   repo,
+  head,
   fetch = globalThis.fetch,
   token,
-}: Repo & { fetch?: FetchLike; token: string | undefined }) => {
+}: Repo & {
+  head: string | undefined
+  fetch?: FetchLike
+  token: string | undefined
+}) => {
   const get: Get = requester(fetch, token)
 
-  const [tags, pullRequests] = await Promise.all([
-    fetchLatestReleaseTag({ owner, repo }, get),
+  const [{ tags, unreleasedCommits }, pullRequests] = await Promise.all([
+    fetchTagAndUnreleasedCommits({ owner, repo }, head, get),
     fetchMergedPullRequests({ owner, repo }, get),
   ])
 
-  return { pullRequests, tags }
+  return { pullRequests, tags, unreleasedCommits }
 }
 
 /**

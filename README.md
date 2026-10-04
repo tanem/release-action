@@ -10,8 +10,7 @@ release command it supersedes.
 
 ## What a release run does
 
-1. Reads the repo's tags and merged pull requests, and derives the bump from
-   the labels on everything merged since the last release.
+1. Reads the repo's tags and merged pull requests, compares the last release tag with the commit being released, and derives the bump from the labels on the pull requests whose merge commits lie between the two. Timestamps are not consulted: a pull request is in the release when its merge commit is, so one merged into another branch is not counted.
 2. `npm version <version>` — the version-bump commit and its `vX.Y.Z` tag, made as
    `github-actions[bot]`, pushed together with `git push --follow-tags`.
 3. Creates the GitHub Release, with notes GitHub generates from the same
@@ -84,7 +83,7 @@ that is a release that fails on a Monday morning with nobody watching.
 
 | Input     | Default               | What it does                                                    |
 | --------- | --------------------- | --------------------------------------------------------------- |
-| `token`   | `${{ github.token }}` | Reads pull requests and tags; creates the GitHub Release.        |
+| `token`   | `${{ github.token }}` | Reads pull requests, tags and commits; creates the GitHub Release. |
 | `dry-run` | `false`               | Computes and logs the release this run would make, changing nothing. |
 | `publish` | `true`                | Bumps, commits and publishes to npm. `false` tags and releases only. |
 
