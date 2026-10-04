@@ -100,3 +100,17 @@ not a gap to fill.
 Give it exactly one release label, per the convention in `README.md`. An
 unlabelled or multi-labelled PR fails the next release run rather than guessing
 at a version — and that run is an unattended Monday cron with nobody watching.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in this repo's GitHub Issues via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default triage labels, each label string equal to its role name. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
