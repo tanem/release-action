@@ -1,7 +1,9 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "dependencyDashboardOSVVulnerabilitySummary": "all",
   "extends": [
     "config:best-practices",
     ":label(internal)"
-  ]
+  ],
+  "osvVulnerabilityAlerts": true
 }
