@@ -79,6 +79,17 @@ derived. Spelling out a `permissions:` block sets every scope you leave out to
 token read pull requests without being told to, but a release that depends on
 that is a release that fails on a Monday morning with nobody watching.
 
+A ruleset that requires pull requests or status checks on the default branch rejects a push made with the workflow token. To protect the default branch that way, check out with a deploy key that has write access, and add deploy keys to the ruleset's bypass list:
+
+```yaml
+      - uses: actions/checkout@<sha>
+        with:
+          fetch-depth: 0
+          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
+```
+
+The checkout then uses an SSH remote and persists the key, and the release push uses it. If the secret is empty, the checkout falls back to the workflow token. Unlike a push made with the workflow token, a push made with a deploy key triggers workflows, so each release commit starts the repo's push workflows, such as CI on the default branch.
+
 ### Inputs
 
 | Input     | Default               | What it does                                                    |

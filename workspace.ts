@@ -72,7 +72,9 @@ export const bumpVersion = (version: string, { exec, env }: Shell) => {
 /**
  * The bump commit and its tag, pushed together so a release can never exist as
  * a tag with no commit behind it. Credentials come from the checkout the
- * calling workflow made, which persists the ambient workflow token.
+ * calling workflow made: the ambient workflow token by default, or a deploy key
+ * when the checkout sets `ssh-key`, which is what lets the push through a
+ * default-branch ruleset that requires pull requests or status checks.
  */
 export const pushRelease = ({ exec, env }: Shell) => {
   exec('git', ['push', '--follow-tags'], env)
